@@ -4,14 +4,9 @@ branding:
   icon: 'upload-cloud'
   color: 'blue'
 
-# This file is the whole action. It wraps the published @kaiba-cloud/cli via npx,
-# so the action repo needs nothing else — no bundled dist, no build on release.
-# To publish it as `ai-kaiba/kaiba-action@v1`: copy this file to the ROOT of a
-# public repo named kaiba-action and tag it v1 (see the CLI README).
-
 inputs:
   command:
-    description: 'build | deploy | status'
+    description: 'build | deploy | registry-login | status'
     required: true
   api-token:
     description: 'A scoped Kaiba deploy token (store it as a secret).'
@@ -19,10 +14,6 @@ inputs:
   hub-url:
     description: 'Kaiba hub URL. Defaults to https://cloud.kaiba.ai.'
     required: false
-  cli-version:
-    description: 'Version of @kaiba-cloud/cli to run. Pin it for reproducible builds.'
-    required: false
-    default: '0.1.0'
   # build inputs
   repo:
     description: 'Git repository URL to build (build).'
@@ -43,17 +34,23 @@ inputs:
     description: 'Build context subdir (build). Default ".".'
     required: false
   git-token:
-    description: 'Token for a private clone (build). Usually secrets.GITHUB_TOKEN.'
+    description: 'Token for a private clone (build).'
     required: false
   # deploy inputs
   service:
     description: 'Compose service name to retarget (deploy, or build with chained deploy).'
     required: false
 
+outputs:
+  registry-url:
+    description: 'The registry push prefix (set by the registry-login command). Append /<image>:<tag>.'
+    value: ${{ steps.run.outputs.registry-url }}
+
 runs:
   using: 'composite'
   steps:
     - name: Run kaiba
+      id: run
       shell: bash
       # Every input reaches bash ONLY through the environment — never interpolated
       # into the script body. Interpolating `${{ inputs.* }}` into `run:` would let
@@ -62,7 +59,7 @@ runs:
       env:
         KAIBA_API_TOKEN: ${{ inputs.api-token }}
         KAIBA_HUB_URL: ${{ inputs.hub-url }}
-        IN_CLI_VERSION: ${{ inputs.cli-version }}
+        ACTION_PATH: ${{ github.action_path }}
         IN_COMMAND: ${{ inputs.command }}
         IN_REPO: ${{ inputs.repo }}
         IN_BRANCH: ${{ inputs.branch }}
@@ -91,7 +88,8 @@ runs:
             add service "$IN_SERVICE"
             add image "$IN_IMAGE"
             ;;
+          registry-login) ;;
           status) ;;
           *) echo "Unknown command: $IN_COMMAND" >&2; exit 1 ;;
         esac
-        npx -y "@kaiba-cloud/cli@${IN_CLI_VERSION:-latest}" "$IN_COMMAND" ${ARGS[@]+"${ARGS[@]}"}
+        node "$ACTION_PATH/dist/cli.js" "$IN_COMMAND" ${ARGS[@]+"${ARGS[@]}"}
