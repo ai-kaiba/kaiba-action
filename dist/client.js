@@ -29,21 +29,26 @@ export class KaibaClient {
         });
         const text = await res.text();
         // Error bodies from the hub are often plain text (Hono HTTPException), so a
-        // bare JSON.parse would crash on them. Parse when possible, fall back to text.
-        let data = {};
+        // bare JSON.parse would crash on them. Parse when possible; keep the parse
+        // outcome so a non-JSON body never masquerades as a typed success payload.
+        let parsed;
+        let parseFailed = false;
         if (text) {
             try {
-                data = JSON.parse(text);
+                parsed = JSON.parse(text);
             }
             catch {
-                data = { error: text };
+                parseFailed = true;
             }
         }
         if (!res.ok) {
-            const message = data.error || text || `${res.status} ${res.statusText}`;
+            const message = (!parseFailed && parsed?.error) || text || `${res.status} ${res.statusText}`;
             throw new KaibaApiError(res.status, message);
         }
-        return data;
+        if (parseFailed) {
+            throw new KaibaApiError(res.status, `unexpected non-JSON response: ${text.slice(0, 200)}`);
+        }
+        return (parsed ?? {});
     }
     startBuild(req) {
         return this.request('POST', '/ci/builds', req);
