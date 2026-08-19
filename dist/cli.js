@@ -55,7 +55,10 @@ function makeClient(flags) {
     const token = process.env.KAIBA_API_TOKEN;
     if (!token)
         fail('KAIBA_API_TOKEN is not set — provide a scoped deploy token');
-    const hubUrl = (typeof flags['hub-url'] === 'string' ? flags['hub-url'] : undefined) ?? process.env.KAIBA_HUB_URL ?? DEFAULT_HUB_URL;
+    // `||` not `??` — the Action passes KAIBA_HUB_URL="" when hub-url is unset, and
+    // an empty string must fall through to the default, not become the base URL.
+    const flagHub = typeof flags['hub-url'] === 'string' ? flags['hub-url'] : '';
+    const hubUrl = flagHub || process.env.KAIBA_HUB_URL || DEFAULT_HUB_URL;
     return new KaibaClient({ hubUrl, token });
 }
 const TERMINAL_BUILD = new Set(['succeeded', 'failed', 'cancelled']);

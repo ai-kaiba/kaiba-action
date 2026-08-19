@@ -28,9 +28,20 @@ export class KaibaClient {
             ...(body ? { body: JSON.stringify(body) } : {}),
         });
         const text = await res.text();
-        const data = text ? JSON.parse(text) : {};
+        // Error bodies from the hub are often plain text (Hono HTTPException), so a
+        // bare JSON.parse would crash on them. Parse when possible, fall back to text.
+        let data = {};
+        if (text) {
+            try {
+                data = JSON.parse(text);
+            }
+            catch {
+                data = { error: text };
+            }
+        }
         if (!res.ok) {
-            throw new KaibaApiError(res.status, data.error ?? `${res.status} ${res.statusText}`);
+            const message = data.error || text || `${res.status} ${res.statusText}`;
+            throw new KaibaApiError(res.status, message);
         }
         return data;
     }
