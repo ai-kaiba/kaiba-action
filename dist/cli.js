@@ -191,12 +191,17 @@ async function waitForService(client, service) {
         const svc = env.services.find((s) => s.name === service);
         if (!svc)
             continue;
-        if (svc.status !== last) {
-            log(`◐ ${service}: ${svc.status}`);
-            last = svc.status;
+        // `running` alone is not enough: a rolling update keeps the OLD pod running
+        // while the new image comes up. Wait for the rollout to complete. `rolledOut`
+        // is undefined against an older hub/CP — then fall back to `running`.
+        const rolledOut = svc.rolledOut !== false;
+        const phase = svc.status === 'running' && !rolledOut ? 'rolling out' : svc.status;
+        if (phase !== last) {
+            log(`◐ ${service}: ${phase}`);
+            last = phase;
         }
-        if (svc.status === 'running') {
-            log(`✓ ${service} running`);
+        if (svc.status === 'running' && rolledOut) {
+            log(`✓ ${service} running the new image`);
             return;
         }
         if (TERMINAL_SERVICE_FAIL.has(svc.status)) {
