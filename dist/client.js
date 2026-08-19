@@ -68,8 +68,8 @@ export class KaibaClient {
     jobs() {
         return this.request('GET', '/ci/jobs');
     }
-    logs(service, tail = 200) {
-        return this.request('GET', `/ci/logs?service=${encodeURIComponent(service)}&tail=${tail}`);
+    logs(service, tail = 200, kind = 'service') {
+        return this.request('GET', `/ci/logs?service=${encodeURIComponent(service)}&tail=${tail}&kind=${kind}`);
     }
     registryCredentials() {
         return this.request('GET', '/ci/registry-credentials');

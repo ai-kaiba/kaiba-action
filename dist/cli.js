@@ -123,9 +123,9 @@ async function dumpBuildLogs(client, buildId, clusterId) {
         // logs are best-effort on failure
     }
 }
-async function dumpServiceLogs(client, service) {
+async function dumpServiceLogs(client, service, kind = 'service') {
     try {
-        const { logs } = await client.logs(service, 200);
+        const { logs } = await client.logs(service, 200, kind);
         if (logs)
             process.stderr.write(`\n--- ${service} logs ---\n${logs}\n${'-'.repeat(service.length + 12)}\n`);
         else
@@ -247,11 +247,11 @@ async function waitForJob(client, service) {
         // `failed` and `blocked` (unmet dependency) are both terminal — fail fast
         // with the reason and logs rather than spinning to timeout.
         if (job.status === 'failed' || job.status === 'blocked') {
-            await dumpServiceLogs(client, service);
+            await dumpServiceLogs(client, service, 'job');
             fail(`${service} ${job.status}${job.error ? `: ${job.error}` : ''}`);
         }
     }
-    await dumpServiceLogs(client, service);
+    await dumpServiceLogs(client, service, 'job');
     fail(`${service} did not complete within ${Math.round(JOB_TIMEOUT_MS / 60000)} min`);
 }
 async function runDeploy(client, service, image) {
