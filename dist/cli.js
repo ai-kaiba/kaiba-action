@@ -128,9 +128,13 @@ async function dumpServiceLogs(client, service) {
         const { logs } = await client.logs(service, 200);
         if (logs)
             process.stderr.write(`\n--- ${service} logs ---\n${logs}\n${'-'.repeat(service.length + 12)}\n`);
+        else
+            process.stderr.write(`\n(no logs available for ${service})\n`);
     }
-    catch {
-        // logs are best-effort on failure
+    catch (err) {
+        // Say WHY logs are missing (e.g. cluster offline) rather than swallowing it.
+        const reason = err instanceof KaibaApiError ? err.message : (err instanceof Error ? err.message : String(err));
+        process.stderr.write(`\n(could not fetch ${service} logs: ${reason})\n`);
     }
 }
 /**
@@ -163,6 +167,9 @@ async function waitForEnvReady(client) {
         }
         if (env.status === 'running')
             return;
+        // Fail fast on a terminal env error instead of spinning the full timeout.
+        if (env.status === 'error')
+            fail('the environment is in an error state — check the dev environment in the console');
         await sleep(POLL_INTERVAL_MS);
     }
     fail('the environment cluster did not become ready in time (cold start took too long)');
@@ -200,10 +207,20 @@ async function waitForService(client, service) {
     await dumpServiceLogs(client, service);
     fail(`${service} did not become ready within ${Math.round(SERVICE_TIMEOUT_MS / 60000)} min`);
 }
-const TERMINAL_JOB = new Set(['succeeded', 'failed']);
-/** Wait for a re-run one-shot job to complete, kubectl-style — report each state,
- *  print logs on failure, exit clean on success. */
-async function waitForJob(client, service) {
+function isoMs(s) {
+    if (!s)
+        return undefined;
+    const t = Date.parse(s);
+    return Number.isNaN(t) ? undefined : t;
+}
+/**
+ * Wait for a re-run one-shot job to complete, kubectl-style — report each state,
+ * print logs on failure, exit clean on success. `sinceMs` is when this deploy
+ * re-ran the job: a Job that started/completed BEFORE it is a stale prior run
+ * (the recreate has not propagated yet), so we keep waiting for the fresh one
+ * rather than reporting the old run's result.
+ */
+async function waitForJob(client, service, sinceMs) {
     const deadline = Date.now() + JOB_TIMEOUT_MS;
     let last = '';
     while (Date.now() < deadline) {
@@ -220,28 +237,43 @@ async function waitForJob(client, service) {
         const job = jobs.find((j) => j.name === service);
         if (!job)
             continue;
+        const start = isoMs(job.startTime);
+        const done = isoMs(job.completionTime);
+        const isStale = (done !== undefined && done < sinceMs) || (start !== undefined && start < sinceMs);
+        if (isStale) {
+            if (last !== 'stale') {
+                log(`◐ job ${service}: waiting for the new run…`);
+                last = 'stale';
+            }
+            continue;
+        }
         if (job.status !== last) {
             log(`◐ job ${service}: ${job.status}`);
             last = job.status;
         }
-        if (!TERMINAL_JOB.has(job.status))
-            continue;
         if (job.status === 'succeeded') {
             log(`✓ ${service} completed`);
             return;
         }
-        await dumpServiceLogs(client, service);
-        fail(`${service} failed${job.error ? `: ${job.error}` : ''}`);
+        // `failed` and `blocked` (unmet dependency) are both terminal — fail fast
+        // with the reason and logs rather than spinning to timeout.
+        if (job.status === 'failed' || job.status === 'blocked') {
+            await dumpServiceLogs(client, service);
+            fail(`${service} ${job.status}${job.error ? `: ${job.error}` : ''}`);
+        }
     }
     await dumpServiceLogs(client, service);
     fail(`${service} did not complete within ${Math.round(JOB_TIMEOUT_MS / 60000)} min`);
 }
 async function runDeploy(client, service, image) {
     await waitForEnvReady(client);
+    // Stamp the moment we ask for the re-run (minus a small clock-skew allowance),
+    // so waitForJob can tell the fresh run from a retained prior run.
+    const sinceMs = Date.now() - 10_000;
     const result = await client.deploy(service, image);
     log(`◐ deploy dispatched: ${service} → ${image}`);
     if (result.job) {
-        await waitForJob(client, service);
+        await waitForJob(client, service, sinceMs);
         return;
     }
     await waitForService(client, service);
