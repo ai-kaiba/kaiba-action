@@ -42,7 +42,12 @@ export class KaibaClient {
             }
         }
         if (!res.ok) {
-            const message = (!parseFailed && parsed?.error) || text || `${res.status} ${res.statusText}`;
+            // Only fall back to the raw body when it was NOT valid JSON. A valid JSON
+            // body WITHOUT an `error` key (e.g. {"code":"NOT_FOUND"}) must not surface
+            // as raw JSON — use the status line instead of dumping the object.
+            const message = parseFailed
+                ? (text || `${res.status} ${res.statusText}`)
+                : (parsed?.error ?? `${res.status} ${res.statusText}`);
             throw new KaibaApiError(res.status, message);
         }
         if (parseFailed) {
