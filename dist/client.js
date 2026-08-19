@@ -60,6 +60,12 @@ export class KaibaClient {
     status() {
         return this.request('GET', '/ci/status');
     }
+    jobs() {
+        return this.request('GET', '/ci/jobs');
+    }
+    logs(service, tail = 200) {
+        return this.request('GET', `/ci/logs?service=${encodeURIComponent(service)}&tail=${tail}`);
+    }
     registryCredentials() {
         return this.request('GET', '/ci/registry-credentials');
     }

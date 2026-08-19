@@ -15,7 +15,11 @@ import { KaibaClient, KaibaApiError } from './client.js';
 const DEFAULT_HUB_URL = 'https://cloud.kaiba.ai';
 const POLL_INTERVAL_MS = 5000;
 const BUILD_TIMEOUT_MS = 30 * 60 * 1000;
-const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
+// A cold dev-environment can take 5–10 min to spin its cluster from scratch, so
+// wait patiently before giving up on readiness, the roll, or a migration.
+const CLUSTER_READY_TIMEOUT_MS = 15 * 60 * 1000;
+const SERVICE_TIMEOUT_MS = 15 * 60 * 1000;
+const JOB_TIMEOUT_MS = 20 * 60 * 1000;
 function parseFlags(argv) {
     const flags = {};
     for (let i = 0; i < argv.length; i++) {
@@ -119,8 +123,53 @@ async function dumpBuildLogs(client, buildId, clusterId) {
         // logs are best-effort on failure
     }
 }
+async function dumpServiceLogs(client, service) {
+    try {
+        const { logs } = await client.logs(service, 200);
+        if (logs)
+            process.stderr.write(`\n--- ${service} logs ---\n${logs}\n${'-'.repeat(service.length + 12)}\n`);
+    }
+    catch {
+        // logs are best-effort on failure
+    }
+}
+/**
+ * Wait for the environment's cluster to be ready. A stopped env is woken by the
+ * status call; a cold cluster can take 5–10 min to provision, so this is patient
+ * and reports progress instead of wedging silently.
+ */
+async function waitForEnvReady(client) {
+    const deadline = Date.now() + CLUSTER_READY_TIMEOUT_MS;
+    let last = '';
+    while (Date.now() < deadline) {
+        let env;
+        try {
+            env = await client.status();
+        }
+        catch (err) {
+            if (err instanceof KaibaApiError && isTransient(err.status)) {
+                if (last !== 'waiting') {
+                    log('◐ waiting for the environment cluster…');
+                    last = 'waiting';
+                }
+                await sleep(POLL_INTERVAL_MS);
+                continue;
+            }
+            throw err;
+        }
+        if (env.status !== last) {
+            log(`◐ environment: ${env.status}`);
+            last = env.status;
+        }
+        if (env.status === 'running')
+            return;
+        await sleep(POLL_INTERVAL_MS);
+    }
+    fail('the environment cluster did not become ready in time (cold start took too long)');
+}
 async function waitForService(client, service) {
-    const deadline = Date.now() + DEPLOY_TIMEOUT_MS;
+    const deadline = Date.now() + SERVICE_TIMEOUT_MS;
+    let last = '';
     while (Date.now() < deadline) {
         await sleep(POLL_INTERVAL_MS);
         let env;
@@ -135,20 +184,66 @@ async function waitForService(client, service) {
         const svc = env.services.find((s) => s.name === service);
         if (!svc)
             continue;
+        if (svc.status !== last) {
+            log(`◐ ${service}: ${svc.status}`);
+            last = svc.status;
+        }
         if (svc.status === 'running') {
             log(`✓ ${service} running`);
             return;
         }
         if (TERMINAL_SERVICE_FAIL.has(svc.status)) {
+            await dumpServiceLogs(client, service);
             fail(`${service} failed to start: ${svc.status}${svc.error ? ` (${svc.error})` : ''}`);
         }
-        log(`◐ ${service} ${svc.status}`);
     }
-    fail(`${service} did not become ready within the deploy timeout`);
+    await dumpServiceLogs(client, service);
+    fail(`${service} did not become ready within ${Math.round(SERVICE_TIMEOUT_MS / 60000)} min`);
+}
+const TERMINAL_JOB = new Set(['succeeded', 'failed']);
+/** Wait for a re-run one-shot job to complete, kubectl-style — report each state,
+ *  print logs on failure, exit clean on success. */
+async function waitForJob(client, service) {
+    const deadline = Date.now() + JOB_TIMEOUT_MS;
+    let last = '';
+    while (Date.now() < deadline) {
+        await sleep(POLL_INTERVAL_MS);
+        let jobs;
+        try {
+            jobs = (await client.jobs()).jobs;
+        }
+        catch (err) {
+            if (err instanceof KaibaApiError && isTransient(err.status))
+                continue;
+            throw err;
+        }
+        const job = jobs.find((j) => j.name === service);
+        if (!job)
+            continue;
+        if (job.status !== last) {
+            log(`◐ job ${service}: ${job.status}`);
+            last = job.status;
+        }
+        if (!TERMINAL_JOB.has(job.status))
+            continue;
+        if (job.status === 'succeeded') {
+            log(`✓ ${service} completed`);
+            return;
+        }
+        await dumpServiceLogs(client, service);
+        fail(`${service} failed${job.error ? `: ${job.error}` : ''}`);
+    }
+    await dumpServiceLogs(client, service);
+    fail(`${service} did not complete within ${Math.round(JOB_TIMEOUT_MS / 60000)} min`);
 }
 async function runDeploy(client, service, image) {
-    await client.deploy(service, image);
+    await waitForEnvReady(client);
+    const result = await client.deploy(service, image);
     log(`◐ deploy dispatched: ${service} → ${image}`);
+    if (result.job) {
+        await waitForJob(client, service);
+        return;
+    }
     await waitForService(client, service);
 }
 function dockerLogin(registry, username, password) {
