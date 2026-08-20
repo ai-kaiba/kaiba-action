@@ -67,6 +67,9 @@ export class KaibaClient {
     deploy(service, image) {
         return this.request('POST', '/ci/deploy', { service, image });
     }
+    deployAll() {
+        return this.request('POST', '/ci/deploy-all', {});
+    }
     status() {
         return this.request('GET', '/ci/status');
     }

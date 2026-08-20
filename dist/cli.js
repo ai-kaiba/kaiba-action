@@ -264,6 +264,14 @@ async function runDeploy(client, service, image) {
     }
     await waitForService(client, service);
 }
+/** Explicit whole-env deploy — re-rolls EVERY service. Deliberate opt-in. */
+async function runDeployAll(client) {
+    await waitForEnvReady(client);
+    await client.deployAll();
+    log('◐ deploy dispatched: ALL services');
+    printStatus(await client.status());
+    log('Run `kaiba status` to watch the services come up.');
+}
 function dockerLogin(registry, username, password) {
     return new Promise((resolve, reject) => {
         const proc = spawn('docker', ['login', registry, '--username', username, '--password-stdin'], { stdio: ['pipe', 'inherit', 'inherit'] });
@@ -301,7 +309,8 @@ async function main() {
     if (!command || command === 'help' || flags['help']) {
         log('Usage:');
         log('  kaiba build  --repo <url> --branch <ref> --image <name> [--tag <t>] [--dockerfile <p>] [--context <d>] [--deploy-service <svc>]');
-        log('  kaiba deploy --service <name> --image <ref>');
+        log('  kaiba deploy --service <name> --image <ref>   # rolls ONLY that service');
+        log('  kaiba deploy --all                            # explicitly re-roll every service');
         log('  kaiba registry-login          # docker login to your Kaiba registry (build your own image)');
         log('  kaiba status');
         log('');
@@ -319,6 +328,10 @@ async function main() {
                 return;
             }
             case 'deploy': {
+                if (flags['all'] === true) {
+                    await runDeployAll(client);
+                    return;
+                }
                 await runDeploy(client, required(flags, 'service'), required(flags, 'image'));
                 return;
             }
